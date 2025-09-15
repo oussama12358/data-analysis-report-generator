@@ -1,0 +1,250 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from openai import OpenAI
+from fpdf import FPDF
+import os
+import io
+import base64
+import tempfile
+
+# Page configuration
+st.set_page_config(
+    page_title="Data Analysis Report Generator",
+    page_icon="📊",
+    layout="wide"
+)
+
+# OpenAI API Key
+api_key = 'ضع_مفتاح_OpenAI_API_هنا'
+client = OpenAI(api_key=api_key) if api_key != 'ضع_مفتاح_OpenAI_API_هنا' else None
+
+def load_data(file):
+    """Load data from uploaded file"""
+    file_extension = file.name.split('.')[-1].lower()
+    
+    if file_extension == 'csv':
+        return pd.read_csv(file)
+    elif file_extension in ['xlsx', 'xls']:
+        return pd.read_excel(file)
+    else:
+        raise ValueError(f"Unsupported file format: {file_extension}")
+
+def analyze_data(df):
+    """Analyze data and return description"""
+    return df.describe()
+
+def create_chart(df):
+    """Create beautiful charts"""
+    try:
+        plt.style.use('seaborn-v0_8')
+    except:
+        plt.style.use('default')
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle('Data Distribution Analysis', fontsize=20, fontweight='bold', color='#2c3e50')
+    
+    colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12']
+    
+    columns = df.select_dtypes(include=[np.number]).columns
+    for i, col in enumerate(columns):
+        if i < 4:
+            row = i // 2
+            col_idx = i % 2
+            ax = axes[row, col_idx]
+            
+            ax.hist(df[col], bins=8, color=colors[i], alpha=0.7, edgecolor='white', linewidth=2)
+            ax.set_title(f'{col} Distribution', fontweight='bold', color='#2c3e50', fontsize=16)
+            ax.set_xlabel(col, fontsize=14)
+            ax.set_ylabel('Frequency', fontsize=14)
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(axis='both', which='major', labelsize=12)
+            
+            mean_val = df[col].mean()
+            std_val = df[col].std()
+            ax.text(0.02, 0.98, f'Mean: {mean_val:.1f}\nStd: {std_val:.1f}', 
+                   transform=ax.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                   fontsize=12)
+    
+    for i in range(len(columns), 4):
+        row = i // 2
+        col_idx = i % 2
+        axes[row, col_idx].set_visible(False)
+    
+    plt.tight_layout()
+    return fig
+
+def generate_summary(description):
+    """Generate AI summary"""
+    if client is None:
+        return "Note: OpenAI API key not provided. Simple summary generated:\n\n" + description.to_string()
+    
+    try:
+        prompt = f"Here are statistics from a dataset:\n{description.to_string()}\nPlease create a detailed and comprehensive summary in English with the following structure:\n1. Data Overview\n2. Key Insights\n3. Trends Analysis\n4. Recommendations\nMake it professional and easy to understand:"
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error generating summary with OpenAI: {str(e)}\n\nSimple summary:\n{description.to_string()}"
+
+def generate_pdf(summary, chart_fig, filename):
+    """Generate PDF report"""
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Header
+    pdf.set_draw_color(41, 128, 185)
+    pdf.set_fill_color(52, 152, 219)
+    pdf.set_text_color(44, 62, 80)
+    
+    pdf.set_font("Arial", "B", 24)
+    pdf.cell(0, 18, "Data Analysis Report", 1, 1, "C", True)
+    pdf.ln(12)
+    
+    # Summary section
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_fill_color(236, 240, 241)
+    pdf.cell(0, 12, "Executive Summary", 1, 1, "L", True)
+    pdf.ln(6)
+    
+    pdf.set_font("Arial", size=13)
+    pdf.set_text_color(44, 62, 80)
+    
+    import re
+    english_summary = re.sub(r'[^\x00-\x7F]+', '', summary)
+    
+    pdf.multi_cell(0, 8, english_summary, 0, "L")
+    
+    pdf.ln(12)
+    
+    # Chart section
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_fill_color(236, 240, 241)
+    pdf.cell(0, 12, "Data Visualization", 1, 1, "L", True)
+    pdf.ln(6)
+    
+    # Save chart to memory instead of temporary file
+    import io
+    chart_buffer = io.BytesIO()
+    chart_fig.savefig(chart_buffer, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+    chart_buffer.seek(0)
+    
+    # Save to a unique temporary file
+    import uuid
+    temp_filename = f"temp_chart_{uuid.uuid4().hex}.png"
+    with open(temp_filename, 'wb') as f:
+        f.write(chart_buffer.getvalue())
+    
+    try:
+        pdf.image(temp_filename, x=15, y=pdf.get_y() + 5, w=180)
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+    
+    # Footer
+    pdf.ln(130)
+    pdf.set_font("Arial", "I", 10)
+    pdf.set_text_color(127, 140, 141)
+    pdf.cell(0, 6, "Generated by Data Analysis Tool", 0, 1, "C")
+    
+    return bytes(pdf.output())
+
+# Main app
+def main():
+    st.title("📊 Data Analysis Report Generator")
+    st.markdown("---")
+    
+    # Sidebar
+    st.sidebar.title("📁 Upload File")
+    st.sidebar.markdown("Upload your CSV or Excel file to generate a professional analysis report.")
+    
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose a file",
+        type=['csv', 'xlsx', 'xls'],
+        help="Upload CSV or Excel files"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Load data
+            with st.spinner("Loading data..."):
+                df = load_data(uploaded_file)
+            
+            st.success(f"✅ File loaded successfully! Shape: {df.shape}")
+            
+            # Display data preview
+            st.subheader("📋 Data Preview")
+            st.dataframe(df.head(10))
+            
+            # Analyze data
+            with st.spinner("Analyzing data..."):
+                description = analyze_data(df)
+            
+            # Display statistics
+            st.subheader("📈 Data Statistics")
+            st.dataframe(description)
+            
+            # Create charts
+            with st.spinner("Creating charts..."):
+                chart_fig = create_chart(df)
+            
+            st.subheader("📊 Data Visualization")
+            st.pyplot(chart_fig)
+            
+            # Generate summary
+            with st.spinner("Generating AI summary..."):
+                summary = generate_summary(description)
+            
+            st.subheader("📝 Executive Summary")
+            st.text_area("Summary", summary, height=200)
+            
+            # Generate PDF
+            if st.button("📄 Generate PDF Report", type="primary"):
+                with st.spinner("Generating PDF report..."):
+                    pdf_bytes = generate_pdf(summary, chart_fig, uploaded_file.name)
+                    
+                    st.success("✅ PDF report generated successfully!")
+                    
+                    # Download button
+                    st.download_button(
+                        label="⬇️ Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"report_{uploaded_file.name.split('.')[0]}.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
+            
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+    
+    else:
+        st.info("👆 Please upload a CSV or Excel file to get started!")
+        
+        # Show example
+        st.subheader("📋 Supported File Formats")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**CSV Files**")
+            st.markdown("- .csv")
+            st.markdown("- Comma separated values")
+        
+        with col2:
+            st.markdown("**Excel Files**")
+            st.markdown("- .xlsx")
+            st.markdown("- .xls")
+        
+        with col3:
+            st.markdown("**Features**")
+            st.markdown("- AI-powered analysis")
+            st.markdown("- Professional PDF reports")
+            st.markdown("- Beautiful visualizations")
+
+if __name__ == "__main__":
+    main()
