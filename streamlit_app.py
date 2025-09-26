@@ -54,7 +54,15 @@ def create_chart(df):
             col_idx = i % 2
             ax = axes[row, col_idx]
             
-            ax.hist(df[col], bins=8, color=colors[i], alpha=0.7, edgecolor='white', linewidth=2)
+            # Create histogram
+            n, bins, patches = ax.hist(df[col], bins=8, color=colors[i], alpha=0.7, edgecolor='white', linewidth=2)
+            
+            # Set y-axis to start from 0
+            if len(n) > 0 and max(n) > 0:
+                ax.set_ylim(0, max(n) * 1.1)  # Start from 0 and add 10% padding at top
+            else:
+                ax.set_ylim(0, 1)  # Default range if no data
+            
             ax.set_title(f'{col} Distribution', fontweight='bold', color='#2c3e50', fontsize=16)
             ax.set_xlabel(col, fontsize=14)
             ax.set_ylabel('Frequency', fontsize=14)
@@ -73,7 +81,7 @@ def create_chart(df):
         col_idx = i % 2
         axes[row, col_idx].set_visible(False)
     
-    plt.tight_layout()
+    plt.tight_layout(pad=2.0)  # Add more padding for better spacing
     return fig
 
 def generate_summary(description):
